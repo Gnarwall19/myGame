@@ -1,6 +1,8 @@
+// Initialize Database
 var mongojs = require('mongojs');
 var db = mongojs('localhost:27017/gamedb', ['account', 'progress']);
 
+// Require Dependencies
 var express = require('express');
 var app = express();
 var serv = require('http').Server(app);
@@ -11,17 +13,14 @@ app.get('/', function (req, res) {
 
 app.use('/client', express.static(__dirname + '/client'));
 
+// Setting PORT to local host
 serv.listen(process.env.PORT || 6969);
 console.log('server running...');
 
+// Initialize empty object for web sockets
+
 var SOCKET_LIST = {};
-/*
-Entity({
-    x: 100;
-    id: 'asadfafd'
-});
-*/
-// Super Constructor
+// Super Constructor to set 'self' for players & bullets
 var Entity = function (param) {
     var self = {
         x: 250,
@@ -60,10 +59,12 @@ var Entity = function (param) {
     return self;
 }
 
+// Player Constructor
 var Player = function (param) {
     var self = Entity(param);
     // self.id = id;
     self.number = "" + Math.floor(Math.random() * 10);
+    self.username = param.username;
     self.pressingRight = false;
     self.pressingLeft = false;
     self.pressingUp = false;
@@ -130,7 +131,8 @@ var Player = function (param) {
             x: self.x,
             y: self.y,
             hp: self.hp,
-            score: self.score
+            score: self.score,
+            map: self.map
         };
     }
 
@@ -143,12 +145,16 @@ var Player = function (param) {
 }
 
 Player.list = {};
-Player.onConnect = function (socket) {
+Player.onConnect = function (socket, username) {
     var map = 'forest';
     if (Math.random() < 0.5) {
         map = 'field';
     }
+
+    // This is where we actually CREATE the player
     var player = Player({
+        username: username,
+        // CLASS: ??
         id: socket.id,
         map: map
     });
@@ -166,6 +172,38 @@ Player.onConnect = function (socket) {
             player.pressingAttack = data.state;
         else if (data.inputId === 'mouseAngle')
             player.mouseAngle = data.state;
+    });
+
+    socket.on('changeMap', function (data) {
+        if (player.map === 'field') {
+            player.map = 'forest';
+        } else {
+            player.map = 'field';
+        }
+        console.log(player.map);
+    });
+
+    socket.on('sendMsgToServer', function (data) {
+        for (var i in SOCKET_LIST) {
+            SOCKET_LIST[i].emit('addToChat', player.username + ': ' + data);
+        }
+    });
+
+    socket.on('sendPmToServer', function (data) {
+        var recipientSocket = null;
+        for (var i in Player.list) {
+            if (Player.list[i].username === data.username) {
+                recipientSocket = SOCKET_LIST[i];
+            }
+        }
+        if (recipientSocket === null) {
+            socket.emit('addToChat', 'SORRY! ' + data.username + ' is OFFLINE.');
+        } else {
+            recipientSocket.emit('addToChat', 'PM from ' + player.username + ': ' + data.message);
+            socket.emit('addToChat', 'PM to: ' + data.username + ': ' + data.message);
+        }
+
+
     });
 
     socket.emit('init', {
@@ -202,6 +240,7 @@ Player.update = function () {
     return pack;
 }
 
+// Bullet Constructor
 var Bullet = function (param) {
     var self = Entity(param);
     self.id = Math.random();
@@ -322,15 +361,18 @@ var addUser = function (data, cb) {
     });
 }
 
+// Setup Socket.io packets
 var io = require('socket.io')(serv, {});
 io.sockets.on('connection', function (socket) {
     socket.id = Math.random();
     SOCKET_LIST[socket.id] = socket;
 
+    // Package sent from client containing Username & Password
     socket.on('signIn', function (data) {
         isValidPassword(data, function (res) {
             if (res) {
-                Player.onConnect(socket);
+                // Passing data.username as a param gives us access to username in the connect function
+                Player.onConnect(socket, data.username);
                 socket.emit('signInResponse', {
                     success: true
                 });
@@ -360,13 +402,6 @@ io.sockets.on('connection', function (socket) {
     socket.on('disconnect', function () {
         delete SOCKET_LIST[socket.id];
         Player.onDisconnect(socket);
-    });
-
-    socket.on('sendMsgToServer', function (data) {
-        var playerName = ('' + socket.id).slice(2, 7);
-        for (var i in SOCKET_LIST) {
-            SOCKET_LIST[i].emit('addToChat', playerName + ': ' + data);
-        }
     });
 
     socket.on('evalServer', function (data) {
